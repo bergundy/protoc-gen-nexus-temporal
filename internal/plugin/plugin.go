@@ -1,17 +1,24 @@
 package plugin
 
 import (
+	"cmp"
 	"fmt"
+	"path"
+	"path/filepath"
 	"runtime"
 
+	nexustemporalv1 "github.com/bergundy/protoc-gen-nexus-temporal/gen/nexustemporal/v1"
 	"github.com/dave/jennifer/jen"
 	"github.com/spf13/pflag"
 	"google.golang.org/protobuf/compiler/protogen"
+	"google.golang.org/protobuf/proto"
 )
 
 const nexusPkg = "github.com/nexus-rpc/sdk-go/nexus"
 const workerPkg = "go.temporal.io/sdk/worker"
 const workflowPkg = "go.temporal.io/sdk/workflow"
+const generatedFilenameExtension = "_nexus_temporal.pb.go"
+const generatedPackageSuffix = "nexustemporal"
 
 var multiLineValues = jen.Options{
 	Close:     "}",
@@ -21,7 +28,9 @@ var multiLineValues = jen.Options{
 }
 
 type Options struct {
-	lang string
+	exclude []string
+	include []string
+	lang    string
 }
 
 type Plugin struct {
@@ -52,22 +61,53 @@ func (p *Plugin) Run(plugin *protogen.Plugin) error {
 	if p.options.lang != "go" {
 		return fmt.Errorf("provided -lang flag is not supported: %q", p.options.lang)
 	}
+	if len(p.options.exclude) > 0 && len(p.options.include) > 0 {
+		return fmt.Errorf("include, exclude are mutually exclusive")
+	}
+
 	p.Plugin = plugin
 	for _, file := range plugin.Files {
 		if !file.Generate {
 			continue
 		}
 
-		f := jen.NewFilePathName(string(file.GoImportPath), string(file.GoPackageName))
+		file.GoPackageName += generatedPackageSuffix
+		prefixToSlash := filepath.ToSlash(file.GeneratedFilenamePrefix)
+		file.GeneratedFilenamePrefix = path.Join(
+			path.Dir(prefixToSlash),
+			string(file.GoPackageName),
+			path.Base(prefixToSlash),
+		)
+		importPath := path.Join(
+			string(file.GoImportPath),
+			string(file.GoPackageName),
+		)
+
+		f := jen.NewFilePathName(importPath, string(file.GoPackageName))
 		p.genCodeGenerationHeader(f, file)
 
+		var hasContent bool
 		for _, svc := range file.Services {
+			if allMethodsDisabled(svc) {
+				continue
+			}
+
+			hasContent = true
 			p.genConsts(f, svc)
 			p.genHandler(f, svc)
 			p.genClient(f, svc)
 		}
 
-		if err := f.Render(p.Plugin.NewGeneratedFile(fmt.Sprintf("%s_nexus_temporal.pb.go", file.GeneratedFilenamePrefix), file.GoImportPath)); err != nil {
+		if !hasContent {
+			continue
+		}
+
+		if err := f.Render(
+			p.Plugin.NewGeneratedFile(
+				file.GeneratedFilenamePrefix+generatedFilenameExtension,
+				protogen.GoImportPath(importPath),
+			),
+		); err != nil {
 			return fmt.Errorf("error rendering file: %w", err)
 		}
 	}
@@ -90,38 +130,25 @@ func (p *Plugin) genCodeGenerationHeader(f *jen.File, target *protogen.File) {
 	f.PackageComment(fmt.Sprintf("source: %s", target.Desc.Path()))
 }
 
-func io(method *protogen.Method) (*jen.Statement, *jen.Statement) {
-	var input *jen.Statement
-	if method.Input.Desc.FullName() != "google.protobuf.Empty" {
-		input = jen.Op("*").Qual(string(method.Input.GoIdent.GoImportPath), method.Input.GoIdent.GoName)
-	} else {
-		input = jen.Qual(nexusPkg, "NoValue")
-	}
-
-	var output *jen.Statement
-	if method.Output.Desc.FullName() != "google.protobuf.Empty" {
-		output = jen.Op("*").Qual(string(method.Output.GoIdent.GoImportPath), method.Output.GoIdent.GoName)
-	} else {
-		output = jen.Qual(nexusPkg, "NoValue")
-	}
-	return input, output
-}
-
 func (p *Plugin) genConsts(f *jen.File, svc *protogen.Service) {
 	svcNameConst := fmt.Sprintf("%sServiceName", svc.GoName)
-	svcNameVal := string(svc.Desc.FullName())
+	svcNameVal := cmp.Or(serviceOptions(svc).GetName(), string(svc.Desc.FullName()))
 	f.Commentf("%s defines the fully-qualified name for the %s service.", svcNameConst, svcNameVal)
 	f.Const().Id(svcNameConst).Op("=").Lit(svcNameVal)
 
 	for _, method := range svc.Methods {
+		if !isMethodEnabled(method) {
+			continue
+		}
+
 		operationVar := fmt.Sprintf("%sOperation", method.GoName)
 		operationNameConst := fmt.Sprintf("%sOperationName", method.GoName)
-		operationNameVal := method.GoName
+		operationNameVal := cmp.Or(operationOptions(method).GetName(), method.GoName)
 
 		f.Commentf("%s defines the fully-qualified name for the %s operation.", operationNameConst, operationNameVal)
 		f.Const().Id(operationNameConst).Op("=").Lit(operationNameVal)
 
-		input, output := io(method)
+		input, output := methodIO(method)
 		f.Var().Id(operationVar).Op("=").Qual(nexusPkg, "NewOperationReference").Types(input, output).Call(jen.Id(operationNameConst))
 	}
 }
@@ -132,7 +159,11 @@ func (p *Plugin) genHandler(f *jen.File, svc *protogen.Service) {
 	var statements []jen.Code
 
 	for _, method := range svc.Methods {
-		input, output := io(method)
+		if !isMethodEnabled(method) {
+			continue
+		}
+
+		input, output := methodIO(method)
 		st := jen.Id(method.GoName).Params(jen.Id("name").String()).Qual(nexusPkg, "Operation").Types(
 			input,
 			output,
@@ -148,6 +179,10 @@ func (p *Plugin) genHandler(f *jen.File, svc *protogen.Service) {
 		g.Id("svc").Op(":=").Qual(nexusPkg, "NewService").Call(jen.Id(fmt.Sprintf("%sServiceName", svc.GoName)))
 		g.Id("svc").Dot("Register").CallFunc(func(g *jen.Group) {
 			for _, method := range svc.Methods {
+				if !isMethodEnabled(method) {
+					continue
+				}
+
 				operationNameConst := fmt.Sprintf("%sOperationName", method.GoName)
 				g.Id("h").Dot(method.GoName).Call(jen.Id(operationNameConst))
 			}
@@ -186,11 +221,15 @@ func (p *Plugin) genClient(f *jen.File, svc *protogen.Service) {
 		})
 
 	for _, method := range svc.Methods {
+		if !isMethodEnabled(method) {
+			continue
+		}
+
 		syncMethodName := method.GoName
 		asyncMethodName := fmt.Sprintf("%sAsync", method.GoName)
 		futureName := fmt.Sprintf("%sFuture", method.GoName)
 		operationNameConst := fmt.Sprintf("%sOperationName", method.GoName)
-		input, output := io(method)
+		input, output := methodIO(method)
 
 		hasInput := method.Input.Desc.FullName() != "google.protobuf.Empty"
 		hasOutput := method.Output.Desc.FullName() != "google.protobuf.Empty"
@@ -306,4 +345,66 @@ func (p *Plugin) genClient(f *jen.File, svc *protogen.Service) {
 				}
 			})
 	}
+}
+
+// allMethodsDisabled determines whether all proto Service Methods are
+// considered disabled by this plugin
+func allMethodsDisabled(svc *protogen.Service) bool {
+	for _, m := range svc.Methods {
+		if isMethodEnabled(m) {
+			return false
+		}
+	}
+	return true
+}
+
+// isMethodEnabled determines whether the given proto Method should be
+// considered enabled by this plugin and included in generated artifacts
+func isMethodEnabled(m *protogen.Method) bool {
+	opts := operationOptions(m)
+	switch {
+	case opts.GetDisabled(): // explicit method disable
+		return false
+	case opts.GetEnabled(): // explicit method enable
+		return true
+	case isServiceEnabled(m.Parent): // implicit method enable
+		return true
+	default:
+		return false
+	}
+}
+
+// isServiceEnabled determines whether the given proto Service should be
+// considered enabled by this plugin and included in generated artifacts
+func isServiceEnabled(svc *protogen.Service) bool {
+	return !serviceOptions(svc).GetDisabled()
+}
+
+func methodIO(method *protogen.Method) (*jen.Statement, *jen.Statement) {
+	var input *jen.Statement
+	if method.Input.Desc.FullName() != "google.protobuf.Empty" {
+		input = jen.Op("*").Qual(string(method.Input.GoIdent.GoImportPath), method.Input.GoIdent.GoName)
+	} else {
+		input = jen.Qual(nexusPkg, "NoValue")
+	}
+
+	var output *jen.Statement
+	if method.Output.Desc.FullName() != "google.protobuf.Empty" {
+		output = jen.Op("*").Qual(string(method.Output.GoIdent.GoImportPath), method.Output.GoIdent.GoName)
+	} else {
+		output = jen.Qual(nexusPkg, "NoValue")
+	}
+	return input, output
+}
+
+// operationOptions returns the OperationOptions for the given proto Method
+func operationOptions(m *protogen.Method) *nexustemporalv1.OperationOptions {
+	opts, _ := proto.GetExtension(m.Desc.Options(), nexustemporalv1.E_Operation).(*nexustemporalv1.OperationOptions)
+	return opts
+}
+
+// serviceOptions returns the ServiceOptions for the given proto Service
+func serviceOptions(svc *protogen.Service) *nexustemporalv1.ServiceOptions {
+	opts, _ := proto.GetExtension(svc.Desc.Options(), nexustemporalv1.E_Service).(*nexustemporalv1.ServiceOptions)
+	return opts
 }

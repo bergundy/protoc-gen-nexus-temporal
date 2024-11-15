@@ -61,6 +61,8 @@ service Greeting {
 version: v2
 modules:
   - path: .
+deps:
+  - buf.build/bergundy/protoc-gen-nexus-temporal
 lint:
   use:
     - BASIC
@@ -79,6 +81,7 @@ breaking:
 
 ```yaml
 version: v2
+clean: true
 managed:
   enabled: true
 plugins:
@@ -109,6 +112,7 @@ import (
 	"context"
 
 	example "github.com/bergundy/greet-nexus-example/gen/example/v1"
+	"github.com/bergundy/greet-nexus-example/gen/example/v1/examplev1nexustemporal"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporalnexus"
@@ -142,7 +146,7 @@ func main() {
 	c, _ := client.Dial(client.Options{HostPort: "localhost:7233"})
 	w := worker.New(c, "example", worker.Options{})
 	// All operations will automatically be registered on the service.
-	example.RegisterGreetingNexusServiceHandler(w, &greetingHandler{})
+	examplev1nexustemporal.RegisterGreetingNexusServiceHandler(w, &greetingHandler{})
 	// Workflows need to be registered separately.
 	w.RegisterWorkflow(GreetWorkflow)
 
@@ -156,7 +160,7 @@ func main() {
 
 ```go
 func CallerWorkflow(ctx workflow.Context) error {
-	c := example.NewGreetingNexusClient("example-endpoint")
+	c := examplev1nexustemporal.NewGreetingNexusClient("example-endpoint")
 	output, err := c.Greet(ctx, &example.GreetInput{Name: "World"}, workflow.NexusOperationOptions{})
 	if err != nil {
 		return err
@@ -170,7 +174,7 @@ func CallerWorkflow(ctx workflow.Context) error {
 
 ```go
 func CallerWorkflow(ctx workflow.Context) error {
-	c := example.NewGreetingNexusClient("example-endpoint")
+	c := examplev1nexustemporal.NewGreetingNexusClient("example-endpoint")
 	fut := c.GreetAsync(ctx, &example.GreetInput{Name: "World"}, workflow.NexusOperationOptions{})
 	exec := workflow.NexusOperationExecution{}
 	// Wait for operation to be started.
@@ -183,6 +187,123 @@ func CallerWorkflow(ctx workflow.Context) error {
 	}
 	workflow.GetLogger(ctx).Info("Got greeting", "greeting", output.Greeting)
 	return nil
+}
+```
+
+## Options
+
+### Service
+
+#### (nexustemporal.v1.service).disabled
+
+`bool`
+
+Boolean option that can be used to exclude all service methods from generated
+artifacts.
+
+**Example:**
+
+```protobuf
+syntax = "proto3";
+
+package example.v1;
+
+import "nexustemporal/v1/options.proto";
+
+service ExampleService {
+  option (nexustemporal.v1.service).disabled = true;
+}
+```
+
+#### (nexustemporal.v1.service).name
+
+`string`
+
+Defines the Nexus Service name. Defaults to the proto Service full name.
+
+**Example:**
+
+```protobuf
+syntax = "proto3";
+
+package example.v1;
+
+import "nexustemporal/v1/options.proto";
+
+service ExampleService {
+  option (nexustemporal.v1.service).name = "example.v1.Example";
+}
+```
+
+### Method
+
+#### (nexustemporal.v1.operation).disabled
+
+`bool`
+
+Boolean option that can be used to explicitly exclude method from generated
+artifacts.
+
+**Example:**
+
+```protobuf
+syntax = "proto3";
+
+package example.v1;
+
+import "nexustemporal/v1/options.proto";
+
+service ExampleService {
+  rpc Foo(FooInput) returns (FooResponse) {
+	option (nexustemporal.v1.operation).disabled = false;
+  }
+}
+```
+
+#### (nexustemporal.v1.operation).enabled
+
+`bool`
+
+Boolean option that can be used to explicitly include method from generated
+artifacts.
+
+**Example:**
+
+```protobuf
+syntax = "proto3";
+
+package example.v1;
+
+import "nexustemporal/v1/options.proto";
+
+service ExampleService {
+  option (nexustemporal.v1.service).disabled = true;
+
+  rpc Foo(FooInput) returns (FooResponse) {
+	option (nexustemporal.v1.operation).enabled = false;
+  }
+}
+```
+
+#### (nexustemporal.v1.operation).name
+
+`string`
+
+Defines the Nexus Operation name. Defaults to the proto Method name.
+
+**Example:**
+
+```protobuf
+syntax = "proto3";
+
+package example.v1;
+
+import "nexustemporal/v1/options.proto";
+
+service ExampleService {
+  rpc Foo(FooInput) returns (FooResponse) {
+	option (nexustemporal.v1.operation).name = "foo";
+  }
 }
 ```
 

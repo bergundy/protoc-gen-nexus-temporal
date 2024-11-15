@@ -3,7 +3,7 @@ syntax="proto3";
 package example.v1;
 
 import "google/protobuf/empty.proto";
-import "google/protobuf/timestamp.proto";
+import "nexustemporal/v1/options.proto";
 
 option go_package = "github.com/bergundy/protoc-gen-nexus-temporal/gen/example/v1;example";
 
@@ -16,13 +16,19 @@ message ExampleOutput {
 }
 
 service OneWay {
-  rpc NoInput(google.protobuf.Empty) returns (ExampleOutput) {
-  }
-  rpc NoOutput(ExampleInput) returns (google.protobuf.Empty) {
-  }
+  rpc NoInput(google.protobuf.Empty) returns (ExampleOutput);
+
+  rpc NoOutput(ExampleInput) returns (google.protobuf.Empty);
 }
 
 service TwoWay {
+  option (nexustemporal.v1.service).name = "example.v1.two-way";
+
   rpc Example(ExampleInput) returns (ExampleOutput) {
+    option (nexustemporal.v1.operation).name = "example";
+  }
+
+  rpc Ignored(google.protobuf.Empty) returns (google.protobuf.Empty) {
+    option (nexustemporal.v1.operation).disabled = true;
   }
 }

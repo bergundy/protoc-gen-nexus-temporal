@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package nexustemporal.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/bergundy/protoc-gen-nexus-temporal/gen/nexustemporal/v1";
+
+extend google.protobuf.ServiceOptions {
+  optional ServiceOptions service = 8233;
+}
+
+extend google.protobuf.MethodOptions {
+  optional OperationOptions operation = 8234;
+}
+
+message OperationOptions {
+  // boolean flag to disable nexus code generation for enabled service
+  bool disabled = 2;
+
+  // boolean flag to enable nexus code gneration for disabled service
+  bool enabled = 3;
+
+  // nexus operation name (defaults to proto method name)
+  string name = 1;
+}
+
+message ServiceOptions {
+  // boolean flag to disable nexus code generation for enabled service
+  bool disabled = 2;
+
+  // nexus service name (defaults to proto service full name)
+  string name = 1;
+}

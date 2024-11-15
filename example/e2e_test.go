@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	example "github.com/bergundy/protoc-gen-nexus-temporal/gen/example/v1"
+	"github.com/bergundy/protoc-gen-nexus-temporal/gen/example/v1/examplev1nexustemporal"
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
 	nexuspb "go.temporal.io/api/nexus/v1"
@@ -16,8 +17,8 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-var oneWayClient = example.NewOneWayNexusClient("example-endpoint")
-var twoWayClient = example.NewTwoWayNexusClient("example-endpoint")
+var oneWayClient = examplev1nexustemporal.NewOneWayNexusClient("example-endpoint")
+var twoWayClient = examplev1nexustemporal.NewTwoWayNexusClient("example-endpoint")
 
 func CallerWorkflow(ctx workflow.Context) error {
 	output, err := oneWayClient.NoInput(ctx, workflow.NexusOperationOptions{})
@@ -33,7 +34,7 @@ func CallerWorkflow(ctx workflow.Context) error {
 }
 
 func CallerWorkflowAsync(ctx workflow.Context) error {
-	oneWayClient := example.NewOneWayNexusClient("example-endpoint")
+	oneWayClient := examplev1nexustemporal.NewOneWayNexusClient("example-endpoint")
 	outputFuture := oneWayClient.NoInputAsync(ctx, workflow.NexusOperationOptions{})
 	output, err := outputFuture.GetTyped(ctx)
 	if err != nil {
@@ -107,8 +108,8 @@ func TestE2E(t *testing.T) {
 	c, err := client.Dial(client.Options{HostPort: "localhost:7233"})
 	require.NoError(t, err)
 	w := worker.New(c, "example", worker.Options{})
-	example.RegisterTwoWayNexusServiceHandler(w, &twoWayHandler{})
-	example.RegisterOneWayNexusServiceHandler(w, &oneWayHandler{})
+	examplev1nexustemporal.RegisterTwoWayNexusServiceHandler(w, &twoWayHandler{})
+	examplev1nexustemporal.RegisterOneWayNexusServiceHandler(w, &oneWayHandler{})
 	w.RegisterWorkflow(CallerWorkflow)
 	w.RegisterWorkflow(CallerWorkflowAsync)
 	w.RegisterWorkflow(TwoWayWorkflow)

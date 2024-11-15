@@ -1,5 +1,7 @@
 version: v2
 modules:
+  - name: buf.build/bergundy/protoc-gen-nexus-temporal
+    path: proto
   - path: example/proto
 lint:
   use:

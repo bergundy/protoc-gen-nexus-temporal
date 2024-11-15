@@ -1,6 +1,10 @@
 version: v2
+clean: true
 managed:
   enabled: true
+  override:
+  - file_option: go_package_prefix
+    value: github.com/bergundy/protoc-gen-nexus-temporal/gen
 plugins:
   - remote: buf.build/protocolbuffers/go
     out: gen
@@ -12,3 +16,6 @@ plugins:
     opt:
       - paths=source_relative
       - lang=go
+inputs:
+  - directory: proto
+  - directory: example/proto
